@@ -1,0 +1,17 @@
+{
+  "name": "eremiza-messenger-api",
+  "version": "1.0.0",
+  "main": "index.js",
+  "author": "maksymilian.org",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "messenger": "node messenger.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "puppeteer": "^20.4.0"
+  }
+}
