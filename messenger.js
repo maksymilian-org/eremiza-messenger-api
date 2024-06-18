@@ -9,7 +9,7 @@ const waitForTimeout = (milliseconds) =>
 export async function sendMessages(messages) {
   try {
     console.time();
-    console.log("Launch the browser...");
+    console.log("Launch the browser for Messenger...");
 
     // Launch the browser
     const browser = await puppeteer.launch({

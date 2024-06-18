@@ -7,7 +7,8 @@
   "type": "module",
   "scripts": {
     "start": "node index.js",
-    "messenger": "node messenger.js"
+    "messenger": "node messenger.js",
+    "eremiza": "node eremiza.js"
   },
   "dependencies": {
     "dotenv": "^16.0.3",
