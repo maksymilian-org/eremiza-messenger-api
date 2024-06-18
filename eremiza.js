@@ -1,15 +1,12 @@
 import puppeteer from "puppeteer";
-import dotenv from "dotenv";
 
-dotenv.config();
+export const getLastAlert = async () => {
+  const LOGIN_PAGE_URL = "https://e-remiza.pl/OSP.UI.SSO/logowanie";
+  const ALERTS_PAGE_URL = "https://e-remiza.pl/OSP.UI.EREMIZA/alarmy";
 
-const LOGIN_PAGE_URL = "https://e-remiza.pl/OSP.UI.SSO/logowanie";
-const ALERTS_PAGE_URL = "https://e-remiza.pl/OSP.UI.EREMIZA/alarmy";
+  const LOGIN = process.env.EREMIZA_LOGIN;
+  const PASSWORD = process.env.EREMIZA_PASSWORD;
 
-const LOGIN = process.env.EREMIZA_LOGIN;
-const PASSWORD = process.env.EREMIZA_PASSWORD;
-
-const getLastAlert = async () => {
   try {
     console.time();
     console.log("Launch browser for eremiza...");
@@ -74,5 +71,3 @@ const getLastAlert = async () => {
     console.log(error);
   }
 };
-
-getLastAlert();

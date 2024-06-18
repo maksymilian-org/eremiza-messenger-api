@@ -1,7 +1,4 @@
 import puppeteer from "puppeteer";
-import dotenv from "dotenv";
-
-dotenv.config();
 
 const waitForTimeout = (milliseconds) =>
   new Promise((r) => setTimeout(r, milliseconds));
@@ -74,7 +71,3 @@ export async function sendMessages(messages) {
     console.log(error);
   }
 }
-
-const TEST_MESSAGES = ["🚨 Alert8!", "Link8"];
-
-sendMessages(TEST_MESSAGES);
