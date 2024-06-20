@@ -46,14 +46,18 @@ export const setData = async (content) => {
   }
 };
 
-export const setIsChecking = async () => {
+export const getIsChecking = async () => {
   const data = await getData();
-  if (!data?.isChecking) {
+  return data?.isChecking;
+};
+
+export const setIsChecking = async (isChecking) => {
+  const data = await getData();
+  if (data?.isChecking !== isChecking) {
     await setData(
       JSON.stringify({
         ...(data || {}),
-        isChecking: true,
-        updated: new Date().toISOString(),
+        isChecking,
       })
     );
   }

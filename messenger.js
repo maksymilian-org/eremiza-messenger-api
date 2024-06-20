@@ -1,7 +1,5 @@
 import puppeteer from "puppeteer";
-
-const waitForTimeout = (milliseconds) =>
-  new Promise((r) => setTimeout(r, milliseconds));
+import { waitForTimeout } from "./utils.js";
 
 export async function sendMessages(messages) {
   try {
