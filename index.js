@@ -2,7 +2,7 @@ import express from "express";
 import dotenv from "dotenv";
 import { validate } from "./validate.js";
 import { getLastAlert } from "./eremiza.js";
-import { sendMessages } from "./messenger.js";
+import { Messenger } from "./messenger.js";
 import { getData, getIsChecking, setAlertData, setIsChecking } from "./gist.js";
 import { waitForTimeout } from "./utils.js";
 
@@ -17,16 +17,17 @@ const launch = async () => {
   try {
     const ITERATION_OF_CHECKING = 6;
     const WAIT_BETWEEN_CHECKING = 15000;
+    const messenger = new Messenger();
 
     const isChecking = await getIsChecking();
     if (!isChecking) {
-      await setIsChecking(true);
-
       for (let i = 0; i < ITERATION_OF_CHECKING; i++) {
         console.log("Iteration", i + 1, "of checking");
         const [lastEremizaAlert, lastGistAlert] = await Promise.all([
           getLastAlert(),
           getData(),
+          setIsChecking(true),
+          messenger.launchBrowser(),
         ]);
 
         if (lastEremizaAlert.date === lastGistAlert.date) {
@@ -43,13 +44,18 @@ const launch = async () => {
         const message = `🚨 ${lastEremizaAlert.type}, ${lastEremizaAlert.address}, ${lastEremizaAlert.description} ${directionsLink}`;
 
         console.log("Sending messages about new alert...");
-        await sendMessages([
+        // await sendMessages([
+        //   { type: "text", value: message },
+        //   // { type: "map", value: lastEremizaAlert.coords },
+        // ]);
+        await messenger.sendMessages([
           { type: "text", value: message },
           // { type: "map", value: lastEremizaAlert.coords },
-        ]);
-
-        console.log("Saving new alert...");
+        ]),
+          console.log("Saving new alert...");
         await setAlertData(lastEremizaAlert);
+
+        await messenger.closeBrowser();
 
         break;
       }
