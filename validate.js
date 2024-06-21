@@ -23,6 +23,10 @@ export function validate() {
       throw new Error("Please specify the GIST_ID environment variable");
     } else if (!process.env.GIST_TOKEN) {
       throw new Error("Please specify the GIST_TOKEN environment variable");
+    } else if (!process.env.MAPBOX_TOKEN) {
+      throw new Error("Please specify the GIST_TOKEN environment variable");
+    } else if (!process.env.FIRE_BRIGADE_COORDINATES) {
+      throw new Error("Please specify the GIST_TOKEN environment variable");
     } else {
       console.log("Environment variables are correctly set");
     }
