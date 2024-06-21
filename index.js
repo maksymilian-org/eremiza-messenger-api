@@ -44,10 +44,6 @@ const launch = async () => {
         const message = `🚨 ${lastEremizaAlert.type}, ${lastEremizaAlert.address}, ${lastEremizaAlert.description} ${directionsLink}`;
 
         console.log("Sending messages about new alert...");
-        // await sendMessages([
-        //   { type: "text", value: message },
-        //   // { type: "map", value: lastEremizaAlert.coords },
-        // ]);
         await messenger.sendMessages([
           { type: "text", value: message },
           // { type: "map", value: lastEremizaAlert.coords },
