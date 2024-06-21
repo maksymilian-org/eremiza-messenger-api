@@ -1,6 +1,6 @@
 import nodemailer from "nodemailer";
 
-export async function mail(title, content, attachments) {
+export async function mail(title, content, attachment) {
   // create reusable transporter object using the default SMTP transport
   let transporter = nodemailer.createTransport({
     host: `${process.env.EMAIL_HOST}`,
@@ -17,9 +17,7 @@ export async function mail(title, content, attachments) {
     from: `${process.env.EMAIL_FROM_NAME} <${process.env.EMAIL_FROM}>`, // sender address
     to: `${process.env.EMAIL_TO}`, // list of receivers
     subject: title, // Subject line
-    text: content, // plain text body
-    html: content, // html body
-    attachments,
+    html: `<img src="data:image/png;base64, ${attachment}" />`,
   });
 
   console.log("Message sent: %s", info.messageId);
