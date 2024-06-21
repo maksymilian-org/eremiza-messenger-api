@@ -65,8 +65,12 @@ const launch = async () => {
     console.log(err);
   }
 };
-
 app.get("/", (req, res) => {
+  res.status(200).send("OK");
+});
+
+app.get("/alert", (req, res) => {
+  console.log("Start alert checking");
   launch();
   res.status(200).send("OK");
 });
