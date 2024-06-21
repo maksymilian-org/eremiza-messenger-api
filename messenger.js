@@ -1,5 +1,7 @@
+import path from "path";
 import puppeteer from "puppeteer";
 import { waitForTimeout } from "./utils.js";
+import { mail } from "./mail.js";
 
 export class Messenger {
   browser = null;
@@ -43,6 +45,16 @@ export class Messenger {
 
       await waitForTimeout(500);
       await this.page.click("#loginbutton");
+
+      await this.page.screenshot({ path: "./screenshot.png" });
+      const __dirname = path.resolve(path.dirname(""));
+      await mail(process.env.EMAIL_TITLE, "debug", [
+        {
+          filename: "screenshot.png",
+          path: __dirname + "/screenshot.png",
+          cid: "screenshot",
+        },
+      ]);
 
       await this.page.waitForSelector('[aria-label="Thread composer"] p');
     } catch (e) {

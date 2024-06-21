@@ -15,8 +15,8 @@ const port = process.env.PORT || 3000;
 const launch = async () => {
   console.time("Message");
   try {
-    const ITERATION_OF_CHECKING = 6;
-    const WAIT_BETWEEN_CHECKING = 15000;
+    const ITERATION_OF_CHECKING = process.env.ITERATION_OF_CHECKING || 6;
+    const WAIT_BETWEEN_CHECKING = process.env.WAIT_BETWEEN_CHECKING || 15000;
     const messenger = new Messenger();
 
     const isChecking = await getIsChecking();
