@@ -13,8 +13,9 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 const launch = async () => {
+  console.time("Message");
   try {
-    const ITERATION_OF_CHECKING = 4;
+    const ITERATION_OF_CHECKING = 6;
     const WAIT_BETWEEN_CHECKING = 15000;
 
     const isChecking = await getIsChecking();
@@ -38,11 +39,19 @@ const launch = async () => {
           continue;
         }
 
-        console.log("Setting new alert...");
-        setAlertData(lastEremizaAlert);
-        const message = `🚨 ${lastEremizaAlert.type}, ${lastEremizaAlert.address}, ${lastEremizaAlert.description}`;
-        console.log("Sending message about new alert...");
-        await sendMessages([message]);
+        const directionsLink = `https://www.google.com/maps/dir/?api=1&origin=${process.env.FIRE_BRIGADE_COORDINATES}&destination=${lastEremizaAlert.coords}&travelmode=driving&layer=traffic`;
+        const message = `🚨 ${lastEremizaAlert.type}, ${lastEremizaAlert.address}, ${lastEremizaAlert.description} ${directionsLink}`;
+
+        console.log("Sending messages about new alert...");
+        await sendMessages([
+          { type: "text", value: message },
+          // { type: "map", value: lastEremizaAlert.coords },
+        ]);
+
+        console.log("Saving new alert...");
+        await setAlertData(lastEremizaAlert);
+
+        break;
       }
       await setIsChecking(false);
       console.log("Checking finnished");

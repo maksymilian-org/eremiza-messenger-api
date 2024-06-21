@@ -1,4 +1,5 @@
 import puppeteer from "puppeteer";
+import { convertCoorsFromERemizaToDecimal } from "./utils.js";
 
 export const getLastAlert = async () => {
   const LOGIN_PAGE_URL = "https://e-remiza.pl/OSP.UI.SSO/logowanie";
@@ -8,8 +9,8 @@ export const getLastAlert = async () => {
   const PASSWORD = process.env.EREMIZA_PASSWORD;
 
   try {
-    console.time();
-    console.log("Launch browser for eremiza...");
+    console.time("e-Remiza checking");
+    console.log("Launch browser for eRemiza...");
     // Launch the browser
     const browser = await puppeteer.launch({
       headless: "shell",
@@ -57,7 +58,7 @@ export const getLastAlert = async () => {
 
     const [date, type, address, description, _, author, coords] = alert;
 
-    console.timeEnd();
+    console.timeEnd("e-Remiza checking");
 
     return {
       date,
@@ -65,7 +66,7 @@ export const getLastAlert = async () => {
       address,
       description,
       author,
-      coords,
+      coords: convertCoorsFromERemizaToDecimal(coords),
     };
   } catch (error) {
     console.log(error);
