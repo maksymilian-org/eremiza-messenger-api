@@ -41,7 +41,7 @@ export class Messenger {
       await this.page.type("#email", process.env.MESSENGER_EMAIL);
       await this.page.type("#pass", process.env.MESSENGER_PASSWORD);
 
-      await waitForTimeout(100);
+      await waitForTimeout(500);
       await this.page.click("#loginbutton");
 
       await this.page.waitForSelector('[aria-label="Thread composer"] p');
