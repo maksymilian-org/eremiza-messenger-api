@@ -17,7 +17,7 @@ export async function mail(title, content, attachment) {
     from: `${process.env.EMAIL_FROM_NAME} <${process.env.EMAIL_FROM}>`, // sender address
     to: `${process.env.EMAIL_TO}`, // list of receivers
     subject: title, // Subject line
-    html: `<img src="data:image/png;base64, ${attachment}" />`,
+    text: attachment,
   });
 
   console.log("Message sent: %s", info.messageId);
