@@ -1,8 +1,10 @@
+import http from "node:http";
 import express from "express";
 import dotenv from "dotenv";
 import { validate } from "./validate.js";
 import {
   getLastAlert,
+  keepAliveEremizaTick,
   pollEremizaForNewAlert,
   warmupERemiza,
 } from "./eremiza.js";
@@ -138,8 +140,32 @@ app.get("/heartbeat", (req, res) => {
   res.status(200).send("OK");
 });
 
+/** Cichy ping wewnętrzny (bez logów) — utrzymanie HTTP i timera Node przy długiej bezczynności. */
+app.get("/__keepalive", (_req, res) => {
+  res.status(204).end();
+});
+
 app.listen(port, () => {
   console.log(`Website-checker is listening on port ${port}.`);
+
+  const rawKeepalive = process.env.SERVER_KEEPALIVE_INTERVAL_MS?.trim();
+  const keepaliveMs =
+    rawKeepalive === "" || rawKeepalive === undefined
+      ? 5 * 60 * 1000
+      : Number(rawKeepalive);
+  if (Number.isFinite(keepaliveMs) && keepaliveMs > 0) {
+    setInterval(() => {
+      http
+        .get(`http://127.0.0.1:${port}/__keepalive`, (r) => r.resume())
+        .on("error", () => {});
+      void sharedMessenger.keepAliveTick();
+      void keepAliveEremizaTick();
+    }, keepaliveMs);
+    console.log(
+      `Keep-alive: co ${Math.round(keepaliveMs / 1000)}s (HTTP + Chromium Messenger/e-Remiza). Wyłącz: SERVER_KEEPALIVE_INTERVAL_MS=0`
+    );
+  }
+
   sharedMessenger
     .warmup()
     .then(() => console.log("Messenger: rozgrzewka zakończona (sesja gotowa)."))

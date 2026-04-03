@@ -632,6 +632,16 @@ export class Messenger {
     }
   }
 
+  /** Lekki ping do Chromium — utrzymanie procesu / strony przy długiej bezczynności. */
+  async keepAliveTick() {
+    try {
+      if (!this.browser?.isConnected?.() || !this.page) return;
+      await this.page.evaluate(() => 1).catch(() => {});
+    } catch {
+      /* ok */
+    }
+  }
+
   async closeBrowser() {
     try {
       if (this.browser) await this.browser.close();

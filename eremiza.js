@@ -206,5 +206,16 @@ async function pollForNewAlertBody(gistDate) {
 export const pollEremizaForNewAlert = (gistDate) =>
   eremizaLock.run(() => pollForNewAlertBody(gistDate));
 
+/** Lekki ping do strony e-Remiza w Chromium (kolejka jak przy getLastAlert). */
+export const keepAliveEremizaTick = () =>
+  eremizaLock.run(async () => {
+    try {
+      if (!browser?.isConnected?.() || !page) return;
+      await page.evaluate(() => 1).catch(() => {});
+    } catch {
+      /* ok */
+    }
+  });
+
 /** Rozgrzewka przy starcie serwera (to samo co pierwsze pobranie alarmu). */
 export const warmupERemiza = () => eremizaLock.run(() => getLastAlertBody());
