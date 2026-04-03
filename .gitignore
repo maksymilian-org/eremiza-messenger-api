@@ -1,5 +1,6 @@
 node_modules
 .cache
+.data
 .env
 content.txt
 .data
