@@ -27,7 +27,7 @@ const MESSENGER_REACTION_FOLLOWUPS = [
   "✅ Będę za 1-3 min",
   "⚠ Będę za 4-6 min",
   "☑ Mogę być powyżej 7 min",
-  "‼ Dojadę sam na miejsce, weźcie nomex",
+  "‼ Dojadę sam, weźcie nomex",
 ];
 
 const launch = async () => {
@@ -83,7 +83,7 @@ const launch = async () => {
       }
 
       const directionsLink = `https://www.google.com/maps/dir/?api=1&origin=${process.env.FIRE_BRIGADE_COORDINATES}&destination=${eremizaAlert.coords}&travelmode=driving&layer=traffic`;
-      const message = `🚨 ${eremizaAlert.type}, ${eremizaAlert.address}, ${eremizaAlert.description} ${directionsLink}\n\nDodaj reakcję ❤ pod wpisem (podwójny klik):`;
+      const message = `🚨 ${eremizaAlert.type}, ${eremizaAlert.address}, ${eremizaAlert.description} ${directionsLink}\n\nDodaj reakcję ❤ (podwójny klik):`;
 
       console.log("Sending messages about new alert...");
       await messenger.sendMessages([
