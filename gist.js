@@ -8,15 +8,15 @@ export const getData = async () => {
   });
 
   try {
-    const gist = await octokit.request(`GET /gists/${process.env.GIST_ID}`, {
-      gist_id: "GIST_ID",
+    const gist = await octokit.request("GET /gists/{gist_id}", {
+      gist_id: process.env.GIST_ID,
       headers: {
         "X-GitHub-Api-Version": "2022-11-28",
       },
     });
     const files = await gist.data.files;
-    const fileContent = files[FILE_NAME].content;
-    const data = JSON.parse(fileContent || {});
+    const fileContent = files[FILE_NAME]?.content;
+    const data = JSON.parse(fileContent || "{}");
     return data;
   } catch (error) {
     console.log(error);
@@ -29,8 +29,8 @@ export const setData = async (content) => {
   });
 
   try {
-    await octokit.request(`PATCH /gists/${process.env.GIST_ID}`, {
-      gist_id: "GIST_ID",
+    await octokit.request("PATCH /gists/{gist_id}", {
+      gist_id: process.env.GIST_ID,
       description: "",
       files: {
         [FILE_NAME]: {
