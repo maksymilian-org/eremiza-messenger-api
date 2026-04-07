@@ -1,3 +1,4 @@
+import "./logger.js";
 import http from "node:http";
 import express from "express";
 import dotenv from "dotenv";
@@ -154,15 +155,43 @@ app.listen(port, () => {
       ? 5 * 60 * 1000
       : Number(rawKeepalive);
   if (Number.isFinite(keepaliveMs) && keepaliveMs > 0) {
+    const runKeepAliveReport = async () => {
+      const httpOk = await new Promise((resolve) => {
+        const req = http.get(
+          `http://127.0.0.1:${port}/__keepalive`,
+          (res) => {
+            res.resume();
+            resolve(res.statusCode === 204);
+          }
+        );
+        req.setTimeout(8000, () => {
+          req.destroy();
+          resolve(false);
+        });
+        req.on("error", () => resolve(false));
+      });
+
+      const [m, e] = await Promise.all([
+        sharedMessenger.keepAliveTick(),
+        keepAliveEremizaTick(),
+      ]);
+
+      const messengerReady =
+        m.browserOk && m.pageOk && m.composerOk && m.jsOk;
+      const eremizaReady = e.browserOk && e.pageOk && e.jsOk;
+      const pipelineOk = httpOk && messengerReady && eremizaReady;
+
+      console.log(
+        `[keep-alive] HTTP:${httpOk ? "OK" : "BŁĄD"} | Messenger chromium:${m.browserOk ? "tak" : "nie"} strona:${m.pageOk ? "tak" : "nie"} kompozytor:${m.composerOk ? "tak" : "nie"} JS:${m.jsOk ? "tak" : "nie"} | e-Remiza chromium:${e.browserOk ? "tak" : "nie"} karta:${e.pageOk ? "tak" : "nie"} JS:${e.jsOk ? "tak" : "nie"} | gotowość na alarm:${pipelineOk ? "PEŁNA" : "NIEPEŁNA"}`
+      );
+    };
+
     setInterval(() => {
-      http
-        .get(`http://127.0.0.1:${port}/__keepalive`, (r) => r.resume())
-        .on("error", () => {});
-      void sharedMessenger.keepAliveTick();
-      void keepAliveEremizaTick();
+      void runKeepAliveReport();
     }, keepaliveMs);
+
     console.log(
-      `Keep-alive: co ${Math.round(keepaliveMs / 1000)}s (HTTP + Chromium Messenger/e-Remiza). Wyłącz: SERVER_KEEPALIVE_INTERVAL_MS=0`
+      `Keep-alive: co ${Math.round(keepaliveMs / 1000)}s — log statusu + ping HTTP/Chromium. Wyłącz: SERVER_KEEPALIVE_INTERVAL_MS=0`
     );
   }
 

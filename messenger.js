@@ -632,14 +632,31 @@ export class Messenger {
     }
   }
 
-  /** Lekki ping do Chromium — utrzymanie procesu / strony przy długiej bezczynności. */
+  /**
+   * Utrzymanie Chromium + sprawdzenie gotowości do wysyłki (kompozytor).
+   * Zwraca obiekt do logów keep-alive.
+   */
   async keepAliveTick() {
+    const s = {
+      browserOk: false,
+      pageOk: false,
+      composerOk: false,
+      jsOk: false,
+    };
     try {
-      if (!this.browser?.isConnected?.() || !this.page) return;
-      await this.page.evaluate(() => 1).catch(() => {});
+      s.browserOk = Boolean(this.browser?.isConnected?.());
+      s.pageOk = Boolean(this.page);
+      s.composerOk = Boolean(
+        this.composerSelector && this.chatFrame && s.pageOk
+      );
+      if (s.browserOk && this.page) {
+        const v = await this.page.evaluate(() => 1).catch(() => null);
+        s.jsOk = v === 1;
+      }
     } catch {
       /* ok */
     }
+    return s;
   }
 
   async closeBrowser() {
