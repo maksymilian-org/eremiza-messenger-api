@@ -5,8 +5,11 @@ import dotenv from "dotenv";
 import { validate } from "./validate.js";
 import {
   getLastAlert,
+  isApibetaDisabled,
+  isSameEremizaAsGist,
   keepAliveEremizaTick,
   pollEremizaForNewAlert,
+  useApibetaEremiza,
   warmupERemiza,
 } from "./eremiza.js";
 import { Messenger } from "./messenger.js";
@@ -66,14 +69,17 @@ const launch = async () => {
 
       let eremizaAlert = lastEremizaAlert;
 
-      if (eremizaAlert.date === lastGistAlert?.date && lastGistAlert?.date) {
-        const polled = await pollEremizaForNewAlert(lastGistAlert.date);
+      if (
+        isSameEremizaAsGist(eremizaAlert, lastGistAlert) &&
+        (lastGistAlert?.date != null || lastGistAlert?.incidentId != null)
+      ) {
+        const polled = await pollEremizaForNewAlert(lastGistAlert);
         if (polled) {
           eremizaAlert = polled;
         }
       }
 
-      if (eremizaAlert.date === lastGistAlert?.date) {
+      if (isSameEremizaAsGist(eremizaAlert, lastGistAlert)) {
         console.log(
           "Nothing new on e-Remiza alerts list. Waiting for the next iteration of checking..."
         );
@@ -178,11 +184,26 @@ app.listen(port, () => {
 
       const messengerReady =
         m.browserOk && m.pageOk && m.composerOk && m.jsOk;
-      const eremizaReady = e.browserOk && e.pageOk && e.jsOk;
+
+      const eremizaReady =
+        e.source === "hybrid"
+          ? (e.apiSessionOk && e.apiOk) ||
+            (e.browserOk && e.pageOk && e.jsOk)
+          : e.source === "apibeta"
+            ? e.sessionOk && e.apiOk
+            : e.browserOk && e.pageOk && e.jsOk;
+
+      const eremizaLog =
+        e.source === "hybrid"
+          ? `e-Remiza hybryda API(sesja:${e.apiSessionOk ? "tak" : "nie"},zapytanie:${e.apiOk ? "tak" : "nie"}) | zapas Chromium(br:${e.browserOk ? "tak" : "nie"},karta:${e.pageOk ? "tak" : "nie"},JS:${e.jsOk ? "tak" : "nie"})`
+          : e.source === "apibeta"
+            ? `e-Remiza API sesja:${e.sessionOk ? "tak" : "nie"} zapytanie:${e.apiOk ? "tak" : "nie"}`
+            : `e-Remiza chromium:${e.browserOk ? "tak" : "nie"} karta:${e.pageOk ? "tak" : "nie"} JS:${e.jsOk ? "tak" : "nie"}`;
+
       const pipelineOk = httpOk && messengerReady && eremizaReady;
 
       console.log(
-        `[keep-alive] HTTP:${httpOk ? "OK" : "BŁĄD"} | Messenger chromium:${m.browserOk ? "tak" : "nie"} strona:${m.pageOk ? "tak" : "nie"} kompozytor:${m.composerOk ? "tak" : "nie"} JS:${m.jsOk ? "tak" : "nie"} | e-Remiza chromium:${e.browserOk ? "tak" : "nie"} karta:${e.pageOk ? "tak" : "nie"} JS:${e.jsOk ? "tak" : "nie"} | gotowość na alarm:${pipelineOk ? "PEŁNA" : "NIEPEŁNA"}`
+        `[keep-alive] HTTP:${httpOk ? "OK" : "BŁĄD"} | Messenger chromium:${m.browserOk ? "tak" : "nie"} strona:${m.pageOk ? "tak" : "nie"} kompozytor:${m.composerOk ? "tak" : "nie"} JS:${m.jsOk ? "tak" : "nie"} | ${eremizaLog} | gotowość na alarm:${pipelineOk ? "PEŁNA" : "NIEPEŁNA"}`
       );
     };
 
@@ -203,7 +224,13 @@ app.listen(port, () => {
     );
   warmupERemiza()
     .then(() =>
-      console.log("e-Remiza: rozgrzewka zakończona (sesja w Chromium gotowa).")
+      console.log(
+        useApibetaEremiza()
+          ? "e-Remiza: rozgrzewka zakończona — tryb tylko API beta (EREMIZA_USE_APIBETA)."
+          : isApibetaDisabled()
+            ? "e-Remiza: rozgrzewka zakończona — tylko Chromium (EREMIZA_APIBETA_DISABLED)."
+            : "e-Remiza: rozgrzewka zakończona — hybryda: domyślnie API beta, przy błędzie Chromium (szczegóły powyżej)."
+      )
     )
     .catch((err) =>
       console.error("e-Remiza: rozgrzewka nie powiodła się:", err?.message || err)

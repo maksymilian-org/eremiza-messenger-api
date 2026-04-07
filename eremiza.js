@@ -1,6 +1,21 @@
 import path from "path";
 import puppeteer from "puppeteer";
+import {
+  fetchLatestAlertApibeta,
+  isApibetaDisabled,
+  isSameEremizaAsGist,
+  keepAliveApibetaTick,
+  tryApibetaBeforeChromium,
+  useApibetaEremiza,
+} from "./eremiza-apibeta.js";
 import { convertCoorsFromERemizaToDecimal, waitForTimeout } from "./utils.js";
+
+export {
+  isApibetaDisabled,
+  isSameEremizaAsGist,
+  tryApibetaBeforeChromium,
+  useApibetaEremiza,
+} from "./eremiza-apibeta.js";
 
 const LOGIN_PAGE_URL = "https://e-remiza.pl/OSP.UI.SSO/logowanie";
 const ALERTS_PAGE_URL = "https://e-remiza.pl/OSP.UI.EREMIZA/alarmy";
@@ -125,9 +140,48 @@ async function readLastAlertFromPage() {
   };
 }
 
+function logApibetaOk(row) {
+  if (row?.date) {
+    console.log(
+      "e-Remiza: odczyt OK — źródło: API beta (apibeta.e-remiza.pl), ostatni alarm:",
+      row.date
+    );
+  } else {
+    console.log(
+      "e-Remiza: odczyt OK — źródło: API beta, brak alarmów w oknie dat (lista pusta)."
+    );
+  }
+}
+
 async function getLastAlertBody() {
   console.time("e-Remiza checking");
   try {
+    if (useApibetaEremiza()) {
+      console.log(
+        "e-Remiza: tryb EREMIZA_USE_APIBETA — wyłącznie API beta (bez Chromium)."
+      );
+      const row = await fetchLatestAlertApibeta();
+      logApibetaOk(row);
+      return row;
+    }
+
+    if (tryApibetaBeforeChromium()) {
+      try {
+        const row = await fetchLatestAlertApibeta();
+        logApibetaOk(row);
+        return row;
+      } catch (err) {
+        console.warn(
+          "e-Remiza: API beta niepowodzenie — fallback Chromium (/alarmy):",
+          err?.message
+        );
+      }
+    } else {
+      console.log(
+        "e-Remiza: EREMIZA_APIBETA_DISABLED — pomijam API beta, tylko Chromium."
+      );
+    }
+
     await ensureBrowser();
 
     const stale =
@@ -136,23 +190,36 @@ async function getLastAlertBody() {
 
     if (stale) {
       console.log(
-        `e-Remiza: logowanie (sesja > ${Math.round(SESSION_REFRESH_MS / 60000)} min lub pierwszy start)…`
+        `e-Remiza: Chromium — logowanie (sesja > ${Math.round(SESSION_REFRESH_MS / 60000)} min lub pierwszy start)…`
       );
       await loginToERemiza();
       lastLoginAt = Date.now();
     } else {
       console.log(
-        "e-Remiza: ponowne użycie sesji (ostatnie logowanie < limit odświeżania)."
+        "e-Remiza: Chromium — ponowne użycie sesji (ostatnie logowanie < limit odświeżania)."
       );
     }
 
     try {
-      return await readLastAlertFromPage();
+      const row = await readLastAlertFromPage();
+      console.log(
+        "e-Remiza: odczyt OK — źródło: Chromium (e-remiza.pl /alarmy), ostatni alarm:",
+        row?.date
+      );
+      return row;
     } catch (err) {
-      console.warn("e-Remiza: błąd odczytu alarmów — ponowne logowanie:", err?.message);
+      console.warn(
+        "e-Remiza: Chromium — błąd odczytu, ponowne logowanie:",
+        err?.message
+      );
       await loginToERemiza();
       lastLoginAt = Date.now();
-      return await readLastAlertFromPage();
+      const row = await readLastAlertFromPage();
+      console.log(
+        "e-Remiza: odczyt OK — źródło: Chromium (po ponownym logowaniu), ostatni alarm:",
+        row?.date
+      );
+      return row;
     }
   } finally {
     console.timeEnd("e-Remiza checking");
@@ -161,70 +228,145 @@ async function getLastAlertBody() {
 
 export const getLastAlert = () => eremizaLock.run(() => getLastAlertBody());
 
-/**
- * Gdy ostatni wiersz tabeli ma ten sam `date` co Gist — przez max POLL_MAX_MS
- * co POLL_INTERVAL_MS ponownie ładuje stronę alarmów i czyta pierwszy wiersz.
- * Zwraca alarm z innym `date` albo `null`, jeśli nadal bez zmian.
- */
-async function pollForNewAlertBody(gistDate) {
-  if (!gistDate) return null;
-
+async function readLastAlertChromiumPoll() {
   await ensureBrowser();
-
   const stale =
     lastLoginAt == null || Date.now() - lastLoginAt >= SESSION_REFRESH_MS;
   if (stale) {
-    console.log("e-Remiza: logowanie przed pollingiem tabeli…");
+    console.log("e-Remiza: Chromium — logowanie przed odczytem (polling)…");
     await loginToERemiza();
     lastLoginAt = Date.now();
   }
+  try {
+    return await readLastAlertFromPage();
+  } catch (err) {
+    console.warn(
+      "e-Remiza: Chromium — błąd podczas pollingu, ponowne logowanie:",
+      err?.message
+    );
+    await loginToERemiza();
+    lastLoginAt = Date.now();
+    return await readLastAlertFromPage();
+  }
+}
 
+/**
+ * Gdy ostatni odczyt = Gist — przez max POLL_MAX_MS co POLL_INTERVAL_MS
+ * ponownie czyta alarmy (API beta i/lub Chromium).
+ */
+async function pollForNewAlertBody(gist) {
+  const gistDate = gist?.date;
+  if (!gistDate && gist?.incidentId == null) return null;
+
+  if (useApibetaEremiza()) {
+    const started = Date.now();
+    console.log(
+      `e-Remiza: polling tylko API beta — co ${POLL_INTERVAL_MS / 1000}s (max ${POLL_MAX_MS / 1000}s)…`
+    );
+    while (Date.now() - started < POLL_MAX_MS) {
+      await waitForTimeout(POLL_INTERVAL_MS);
+      let row;
+      try {
+        row = await fetchLatestAlertApibeta();
+      } catch (err) {
+        console.warn("e-Remiza: polling API beta — błąd:", err?.message);
+        continue;
+      }
+      if (row && !isSameEremizaAsGist(row, gist)) {
+        console.log(
+          "e-Remiza: nowy alarm w pollingu — źródło: API beta."
+        );
+        return row;
+      }
+    }
+    return null;
+  }
+
+  const chromiumOnly = isApibetaDisabled();
+  let useChromium = chromiumOnly;
   const started = Date.now();
   console.log(
-    `e-Remiza: brak nowego vs Gist — polling tabeli co ${POLL_INTERVAL_MS / 1000}s (max ${POLL_MAX_MS / 1000}s)…`
+    chromiumOnly
+      ? `e-Remiza: polling — tylko Chromium, co ${POLL_INTERVAL_MS / 1000}s (max ${POLL_MAX_MS / 1000}s)…`
+      : `e-Remiza: polling — najpierw API beta, przy błędzie Chromium; co ${POLL_INTERVAL_MS / 1000}s (max ${POLL_MAX_MS / 1000}s)…`
   );
 
   while (Date.now() - started < POLL_MAX_MS) {
     await waitForTimeout(POLL_INTERVAL_MS);
     let row;
-    try {
-      row = await readLastAlertFromPage();
-    } catch (err) {
-      console.warn("e-Remiza: błąd podczas pollingu — ponowne logowanie:", err?.message);
-      await loginToERemiza();
-      lastLoginAt = Date.now();
-      row = await readLastAlertFromPage();
+
+    if (!useChromium) {
+      try {
+        row = await fetchLatestAlertApibeta();
+      } catch (err) {
+        console.warn(
+          "e-Remiza: polling — API beta błąd, dalszy polling przez Chromium:",
+          err?.message
+        );
+        useChromium = true;
+      }
     }
-    if (row?.date && row.date !== gistDate) {
-      console.log("e-Remiza: nowy alarm pojawił się w tabeli podczas pollingu.");
+
+    if (useChromium) {
+      row = await readLastAlertChromiumPoll();
+    }
+
+    if (row && !isSameEremizaAsGist(row, gist)) {
+      console.log(
+        `e-Remiza: nowy alarm w pollingu — źródło: ${useChromium ? "Chromium" : "API beta"}.`
+      );
       return row;
     }
   }
   return null;
 }
 
-export const pollEremizaForNewAlert = (gistDate) =>
-  eremizaLock.run(() => pollForNewAlertBody(gistDate));
+export const pollEremizaForNewAlert = (gist) =>
+  eremizaLock.run(() => pollForNewAlertBody(gist));
 
-/** Lekki ping Chromium e-Remiza + status do logów keep-alive. */
+async function chromiumKeepAliveShape() {
+  const s = {
+    source: "chromium",
+    browserOk: false,
+    pageOk: false,
+    jsOk: false,
+  };
+  try {
+    s.browserOk = Boolean(browser?.isConnected?.());
+    s.pageOk = Boolean(page);
+    if (s.browserOk && page) {
+      const v = await page.evaluate(() => 1).catch(() => null);
+      s.jsOk = v === 1;
+    }
+  } catch {
+    /* ok */
+  }
+  return s;
+}
+
+/** Ping sesji e-Remiza: tryb hybrydowy sprawdza API + zapas Chromium. */
 export const keepAliveEremizaTick = () =>
   eremizaLock.run(async () => {
-    const s = {
-      browserOk: false,
-      pageOk: false,
-      jsOk: false,
-    };
-    try {
-      s.browserOk = Boolean(browser?.isConnected?.());
-      s.pageOk = Boolean(page);
-      if (s.browserOk && page) {
-        const v = await page.evaluate(() => 1).catch(() => null);
-        s.jsOk = v === 1;
-      }
-    } catch {
-      /* ok */
+    if (useApibetaEremiza()) {
+      return keepAliveApibetaTick();
     }
-    return s;
+    if (isApibetaDisabled()) {
+      return chromiumKeepAliveShape();
+    }
+    const api = await keepAliveApibetaTick().catch(() => ({
+      source: "apibeta",
+      sessionOk: false,
+      apiOk: false,
+    }));
+    const cr = await chromiumKeepAliveShape();
+    return {
+      source: "hybrid",
+      apiSessionOk: api.sessionOk,
+      apiOk: api.apiOk,
+      browserOk: cr.browserOk,
+      pageOk: cr.pageOk,
+      jsOk: cr.jsOk,
+    };
   });
 
 /** Rozgrzewka przy starcie serwera (to samo co pierwsze pobranie alarmu). */

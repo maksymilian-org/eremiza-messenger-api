@@ -8,7 +8,8 @@
   "scripts": {
     "start": "node index.js",
     "messenger": "node messenger.js",
-    "eremiza": "node eremiza.js"
+    "eremiza": "node eremiza.js",
+    "test:apibeta": "node scripts/test-apibeta.mjs"
   },
   "dependencies": {
     "dotenv": "^16.0.3",
