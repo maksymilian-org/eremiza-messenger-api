@@ -90,7 +90,7 @@ const launch = async () => {
       }
 
       const directionsLink = `https://www.google.com/maps/dir/?api=1&origin=${process.env.FIRE_BRIGADE_COORDINATES}&destination=${eremizaAlert.coords}&travelmode=driving&layer=traffic`;
-      const message = `🚨 ${eremizaAlert.type}, ${eremizaAlert.address}, ${eremizaAlert.description} ${directionsLink}\n\nDodaj reakcję ❤ (podwójny klik):`;
+      const message = `🚨 ${eremizaAlert.type}, ${eremizaAlert.address}, ${eremizaAlert.description} ${directionsLink} @wszyscy\n\nDodaj reakcję ❤ (podwójny klik):`;
 
       console.log("Sending messages about new alert...");
       await messenger.sendMessages([
