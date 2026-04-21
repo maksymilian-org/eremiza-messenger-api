@@ -22,6 +22,35 @@ validate();
 const app = express();
 const port = Number(process.env.PORT) || 9998;
 
+/** Odstęp między pingami Automate — powyżej uznajemy Flow na telefonie za niedziałający (domyślnie 1,5 min). */
+const AUTOMATE_PING_MAX_GAP_MS = (() => {
+  const n = Number(process.env.AUTOMATE_PING_MAX_GAP_MS);
+  return Number.isFinite(n) && n > 0 ? n : 90_000;
+})();
+
+let automateLastPingMs = null;
+
+function getAutomateFlowStatus() {
+  const now = Date.now();
+  if (automateLastPingMs == null) {
+    return {
+      lastPingAt: null,
+      ageMs: null,
+      secondsSinceLastPing: null,
+      ok: false,
+      maxGapMs: AUTOMATE_PING_MAX_GAP_MS,
+    };
+  }
+  const ageMs = now - automateLastPingMs;
+  return {
+    lastPingAt: new Date(automateLastPingMs).toISOString(),
+    ageMs,
+    secondsSinceLastPing: Math.round(ageMs / 1000),
+    ok: ageMs <= AUTOMATE_PING_MAX_GAP_MS,
+    maxGapMs: AUTOMATE_PING_MAX_GAP_MS,
+  };
+}
+
 /** Jedna instancja + profil Chromium — logowanie przy starcie, przy alarmie tylko szybkie sprawdzenie. */
 const sharedMessenger = new Messenger();
 
@@ -68,6 +97,8 @@ async function collectComponentStatus() {
         ? e.sessionOk && e.apiOk
         : e.browserOk && e.pageOk && e.jsOk;
 
+  const automate = getAutomateFlowStatus();
+
   return {
     at: new Date().toISOString(),
     service: "eremiza-messenger-api",
@@ -79,8 +110,10 @@ async function collectComponentStatus() {
     http: { internalLoopbackOk: httpOk },
     messenger: { ...m, ready: messengerReady },
     eremiza: { ...e, ready: eremizaReady },
+    automate,
     pipeline: {
       readyForAlarm: httpOk && messengerReady && eremizaReady,
+      automateFlowOk: automate.ok,
     },
   };
 }
@@ -208,6 +241,20 @@ app.get("/heartbeat", (req, res) => {
 });
 
 /**
+ * Ping z aplikacji Automate na telefonie (np. co 1 min) — utrwala czas ostatniego żądania.
+ * GET lub POST; odpowiedź lekka pod task HTTP w Automate. Brak pingów dłużej niż `maxGapMs` → `automate.ok: false` w /status.
+ */
+const handleAutomatePing = (_req, res) => {
+  automateLastPingMs = Date.now();
+  res.status(200).json({
+    ok: true,
+    at: new Date(automateLastPingMs).toISOString(),
+  });
+};
+app.get("/automate/ping", handleAutomatePing);
+app.post("/automate/ping", handleAutomatePing);
+
+/**
  * Status składników (HTTP w pętli, Messenger Chromium, e-Remiza) — odpowiednik logu `[keep-alive]`.
  * JSON dla zewnętrznego monitora; `pipeline.readyForAlarm` = pełna gotowość jak w logu terminala.
  */
@@ -232,7 +279,7 @@ app.get("/__keepalive", (_req, res) => {
 
 app.listen(port, () => {
   console.log(
-    `Website-checker is listening on port ${port}. Status JSON: http://127.0.0.1:${port}/status`,
+    `Website-checker is listening on port ${port}. Status: http://127.0.0.1:${port}/status · Automate ping: http://127.0.0.1:${port}/automate/ping`,
   );
 
   const rawKeepalive = process.env.SERVER_KEEPALIVE_INTERVAL_MS?.trim();
@@ -244,8 +291,13 @@ app.listen(port, () => {
     const runKeepAliveReport = async () => {
       const s = await collectComponentStatus();
       const eremizaLog = eremizaKeepaliveLogPl(s.eremiza);
+      const autoLog = s.automate.ok
+        ? `OK (ostatni ping ${s.automate.secondsSinceLastPing ?? 0}s temu)`
+        : s.automate.lastPingAt == null
+          ? "BŁĄD (brak pingów)"
+          : `BŁĄD (próg ${Math.round(s.automate.maxGapMs / 1000)}s, ostatni ping ${s.automate.secondsSinceLastPing}s temu)`;
       console.log(
-        `[keep-alive] HTTP:${s.http.internalLoopbackOk ? "OK" : "BŁĄD"} | Messenger chromium:${s.messenger.browserOk ? "tak" : "nie"} strona:${s.messenger.pageOk ? "tak" : "nie"} kompozytor:${s.messenger.composerOk ? "tak" : "nie"} JS:${s.messenger.jsOk ? "tak" : "nie"} | ${eremizaLog} | gotowość na alarm:${s.pipeline.readyForAlarm ? "PEŁNA" : "NIEPEŁNA"}`
+        `[keep-alive] HTTP:${s.http.internalLoopbackOk ? "OK" : "BŁĄD"} | Messenger chromium:${s.messenger.browserOk ? "tak" : "nie"} strona:${s.messenger.pageOk ? "tak" : "nie"} kompozytor:${s.messenger.composerOk ? "tak" : "nie"} JS:${s.messenger.jsOk ? "tak" : "nie"} | ${eremizaLog} | Automate:${autoLog} | gotowość na alarm:${s.pipeline.readyForAlarm ? "PEŁNA" : "NIEPEŁNA"}`
       );
     };
 
