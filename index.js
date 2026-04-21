@@ -25,6 +25,66 @@ const port = Number(process.env.PORT) || 9998;
 /** Jedna instancja + profil Chromium — logowanie przy starcie, przy alarmie tylko szybkie sprawdzenie. */
 const sharedMessenger = new Messenger();
 
+/** Ping własnego HTTP (jak w interwale keep-alive) — bez logów. */
+function probeInternalKeepalive(targetPort) {
+  return new Promise((resolve) => {
+    const req = http.get(
+      `http://127.0.0.1:${targetPort}/__keepalive`,
+      (res) => {
+        res.resume();
+        resolve(res.statusCode === 204);
+      },
+    );
+    req.setTimeout(8000, () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.on("error", () => resolve(false));
+  });
+}
+
+function eremizaKeepaliveLogPl(e) {
+  return e.source === "hybrid"
+    ? `e-Remiza hybryda API(sesja:${e.apiSessionOk ? "tak" : "nie"},zapytanie:${e.apiOk ? "tak" : "nie"}) | zapas Chromium(br:${e.browserOk ? "tak" : "nie"},karta:${e.pageOk ? "tak" : "nie"},JS:${e.jsOk ? "tak" : "nie"})`
+    : e.source === "apibeta"
+      ? `e-Remiza API sesja:${e.sessionOk ? "tak" : "nie"} zapytanie:${e.apiOk ? "tak" : "nie"}`
+      : `e-Remiza chromium:${e.browserOk ? "tak" : "nie"} karta:${e.pageOk ? "tak" : "nie"} JS:${e.jsOk ? "tak" : "nie"}`;
+}
+
+/** Ten sam zestaw co log `[keep-alive]` — pod endpoint /status i monitor zewnętrzny. */
+async function collectComponentStatus() {
+  const httpOk = await probeInternalKeepalive(port);
+  const [m, e] = await Promise.all([
+    sharedMessenger.keepAliveTick(),
+    keepAliveEremizaTick(),
+  ]);
+  const messengerReady =
+    m.browserOk && m.pageOk && m.composerOk && m.jsOk;
+  const eremizaReady =
+    e.source === "hybrid"
+      ? (e.apiSessionOk && e.apiOk) ||
+        (e.browserOk && e.pageOk && e.jsOk)
+      : e.source === "apibeta"
+        ? e.sessionOk && e.apiOk
+        : e.browserOk && e.pageOk && e.jsOk;
+
+  return {
+    at: new Date().toISOString(),
+    service: "eremiza-messenger-api",
+    eremizaMode: useApibetaEremiza()
+      ? "apibeta_only"
+      : isApibetaDisabled()
+        ? "chromium_only"
+        : "hybrid",
+    http: { internalLoopbackOk: httpOk },
+    messenger: { ...m, ready: messengerReady },
+    eremiza: { ...e, ready: eremizaReady },
+    pipeline: {
+      readyForAlarm: httpOk && messengerReady && eremizaReady,
+    },
+  };
+}
+
 /** Po treści alarmu — prośba o reakcję + legenda (emoji zbliżone do kolorów reakcji w Messengerze). */
 const MESSENGER_REACTION_FOLLOWUPS = [
   "❌ Nie jadę",
@@ -147,13 +207,33 @@ app.get("/heartbeat", (req, res) => {
   res.status(200).send("OK");
 });
 
+/**
+ * Status składników (HTTP w pętli, Messenger Chromium, e-Remiza) — odpowiednik logu `[keep-alive]`.
+ * JSON dla zewnętrznego monitora; `pipeline.readyForAlarm` = pełna gotowość jak w logu terminala.
+ */
+app.get("/status", async (_req, res) => {
+  try {
+    const body = await collectComponentStatus();
+    res.status(200).json(body);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      ok: false,
+      error: err?.message ?? String(err),
+      stack: err?.stack,
+    });
+  }
+});
+
 /** Cichy ping wewnętrzny (bez logów) — utrzymanie HTTP i timera Node przy długiej bezczynności. */
 app.get("/__keepalive", (_req, res) => {
   res.status(204).end();
 });
 
 app.listen(port, () => {
-  console.log(`Website-checker is listening on port ${port}.`);
+  console.log(
+    `Website-checker is listening on port ${port}. Status JSON: http://127.0.0.1:${port}/status`,
+  );
 
   const rawKeepalive = process.env.SERVER_KEEPALIVE_INTERVAL_MS?.trim();
   const keepaliveMs =
@@ -162,48 +242,10 @@ app.listen(port, () => {
       : Number(rawKeepalive);
   if (Number.isFinite(keepaliveMs) && keepaliveMs > 0) {
     const runKeepAliveReport = async () => {
-      const httpOk = await new Promise((resolve) => {
-        const req = http.get(
-          `http://127.0.0.1:${port}/__keepalive`,
-          (res) => {
-            res.resume();
-            resolve(res.statusCode === 204);
-          }
-        );
-        req.setTimeout(8000, () => {
-          req.destroy();
-          resolve(false);
-        });
-        req.on("error", () => resolve(false));
-      });
-
-      const [m, e] = await Promise.all([
-        sharedMessenger.keepAliveTick(),
-        keepAliveEremizaTick(),
-      ]);
-
-      const messengerReady =
-        m.browserOk && m.pageOk && m.composerOk && m.jsOk;
-
-      const eremizaReady =
-        e.source === "hybrid"
-          ? (e.apiSessionOk && e.apiOk) ||
-            (e.browserOk && e.pageOk && e.jsOk)
-          : e.source === "apibeta"
-            ? e.sessionOk && e.apiOk
-            : e.browserOk && e.pageOk && e.jsOk;
-
-      const eremizaLog =
-        e.source === "hybrid"
-          ? `e-Remiza hybryda API(sesja:${e.apiSessionOk ? "tak" : "nie"},zapytanie:${e.apiOk ? "tak" : "nie"}) | zapas Chromium(br:${e.browserOk ? "tak" : "nie"},karta:${e.pageOk ? "tak" : "nie"},JS:${e.jsOk ? "tak" : "nie"})`
-          : e.source === "apibeta"
-            ? `e-Remiza API sesja:${e.sessionOk ? "tak" : "nie"} zapytanie:${e.apiOk ? "tak" : "nie"}`
-            : `e-Remiza chromium:${e.browserOk ? "tak" : "nie"} karta:${e.pageOk ? "tak" : "nie"} JS:${e.jsOk ? "tak" : "nie"}`;
-
-      const pipelineOk = httpOk && messengerReady && eremizaReady;
-
+      const s = await collectComponentStatus();
+      const eremizaLog = eremizaKeepaliveLogPl(s.eremiza);
       console.log(
-        `[keep-alive] HTTP:${httpOk ? "OK" : "BŁĄD"} | Messenger chromium:${m.browserOk ? "tak" : "nie"} strona:${m.pageOk ? "tak" : "nie"} kompozytor:${m.composerOk ? "tak" : "nie"} JS:${m.jsOk ? "tak" : "nie"} | ${eremizaLog} | gotowość na alarm:${pipelineOk ? "PEŁNA" : "NIEPEŁNA"}`
+        `[keep-alive] HTTP:${s.http.internalLoopbackOk ? "OK" : "BŁĄD"} | Messenger chromium:${s.messenger.browserOk ? "tak" : "nie"} strona:${s.messenger.pageOk ? "tak" : "nie"} kompozytor:${s.messenger.composerOk ? "tak" : "nie"} JS:${s.messenger.jsOk ? "tak" : "nie"} | ${eremizaLog} | gotowość na alarm:${s.pipeline.readyForAlarm ? "PEŁNA" : "NIEPEŁNA"}`
       );
     };
 
