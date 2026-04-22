@@ -5,8 +5,14 @@
   "author": "maksymilian.org",
   "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=18.11.0"
+  },
   "scripts": {
     "start": "node index.js",
+    "dev": "node --watch index.js",
+    "dev:board-ui": "node --watch scripts/board-ui-server.mjs",
+    "board:ui": "node scripts/board-ui-server.mjs",
     "messenger": "node messenger.js",
     "eremiza": "node eremiza.js",
     "test:apibeta": "node scripts/test-apibeta.mjs"

@@ -4,6 +4,7 @@ import {
   messengerDebugEnabled,
   saveMessengerDebugSnapshot,
 } from "./messenger-debug.js";
+import { ingestChatSnapshot } from "./board.js";
 import { waitForTimeout } from "./utils.js";
 
 const LOGIN_EMAIL_SELECTORS = [
@@ -116,6 +117,110 @@ const LIKE_CONFIRM_CANDIDATES = [
 /** Bez wymuszonego długiego czekania na przycisk Like po pierwszej wiadomości (przyspieszenie wpisywania) */
 const POST_SEND_STABILIZE_FOLLOW_MS = 600;
 
+/** Maks. wpisów w zbiorze „już widzianych” (FIFO przez usuwanie najstarszych). */
+const MESSAGE_WATCH_SEEN_CAP = 6000;
+
+/**
+ * Wywoływane w kontekście strony/ramki czatu (przekazywane przez Puppeteer do przeglądarki).
+ * Heurystyka pod Comet / messenger.com — DOM bywa niestabilny.
+ * @returns {{ id: string, author: string, text: string, reactionAriaLabels: string[] }[]}
+ */
+function scrapeVisibleChatState() {
+  const hash = (s) => {
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) {
+      h = ((h << 5) + h) ^ s.charCodeAt(i);
+    }
+    return (h >>> 0).toString(36);
+  };
+
+  const cleanMessengerRowText = (raw) => {
+    let s = String(raw).replace(/\s+/g, " ").trim();
+    s = s.replace(/\bEnter,?\s*Message sent\b/gi, "");
+    s = s.replace(/\bPress enter to send\b/gi, "");
+    s = s.replace(/\bMessage sent\b/gi, "");
+    s = s.replace(/\bSent\b/gi, "");
+    s = s.replace(/\s*·\s*\d+[mhd]\b/gi, "");
+    s = s.replace(/\bToday at\s+\d{1,2}:\d{2}\s*(?:AM|PM)?/gi, "");
+    s = s.replace(/\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)\s*/gi, "");
+    s = s.replace(/\s*by You\s*$/i, "");
+    s = s.replace(/\s*by\s+[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż][^·]{0,80}\s*$/i, "");
+    return s.replace(/\s{2,}/g, " ").trim();
+  };
+
+  const rows = Array.from(document.querySelectorAll('div[role="row"]'));
+  /** @type {{ id: string, author: string, text: string, reactionAriaLabels: string[] }[]} */
+  const out = [];
+  let lastAuthor = "";
+
+  for (const row of rows) {
+    if (row.querySelector('[contenteditable="true"]')) continue;
+
+    const mid =
+      row.getAttribute("data-mid") ||
+      row.querySelector("[data-mid]")?.getAttribute?.("data-mid") ||
+      "";
+
+    const nameEl = row.querySelector(
+      'h4 span[dir="auto"], h4 a span[dir="auto"], h4',
+    );
+    const nameGuess = nameEl?.textContent?.trim();
+    if (
+      nameGuess &&
+      nameGuess.length < 160 &&
+      !nameGuess.includes("\n") &&
+      nameGuess.length > 0
+    ) {
+      lastAuthor = nameGuess;
+    }
+
+    const bodies = Array.from(
+      row.querySelectorAll('div[dir="auto"], span[dir="auto"]'),
+    ).filter((el) => !el.closest("h4"));
+    if (!bodies.length) continue;
+
+    let text = bodies
+      .map((b) => b.textContent?.trim() || "")
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    text = cleanMessengerRowText(text);
+    if (!text || text.length > 12000) continue;
+    if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(text)) continue;
+
+    const author = lastAuthor || "nieznany";
+    const id = mid ? `mid:${mid}` : `h:${hash(author + "\n" + text)}`;
+
+    const reactionAriaLabels = [];
+    const seenLab = new Set();
+    for (const el of row.querySelectorAll("[aria-label]")) {
+      const al = el.getAttribute("aria-label") || "";
+      const low = al.toLowerCase();
+      if (al.length < 6 || al.length > 400) continue;
+      if (/^(like|love|wow|haha|sad|angry|care)\s*$/i.test(al)) continue;
+      if (
+        /reacted|zareag|reaction|reakcj|others who|who reacted/i.test(low)
+      ) {
+        if (!seenLab.has(al)) {
+          seenLab.add(al);
+          reactionAriaLabels.push(al);
+        }
+      }
+    }
+
+    out.push({ id, author, text, reactionAriaLabels });
+  }
+
+  const seen = new Set();
+  const deduped = [];
+  for (const m of out) {
+    if (seen.has(m.id)) continue;
+    seen.add(m.id);
+    deduped.push(m);
+  }
+  return deduped;
+}
+
 export class Messenger {
   browser = null;
   page = null;
@@ -130,6 +235,12 @@ export class Messenger {
 
   /** Katalog sesji debug (MESSENGER_DEBUG=1): `.data/messenger-debug/<runId>/`. */
   _debugRunId = null;
+
+  /** Nasłuch wiadomości w wątku (polling DOM). */
+  _msgWatchTimer = null;
+  /** @type {Set<string> | null} */
+  _msgWatchSeen = null;
+  _msgWatchBootstrapped = false;
 
   constructor() {}
 
@@ -636,6 +747,89 @@ export class Messenger {
    * Utrzymanie Chromium + sprawdzenie gotowości do wysyłki (kompozytor).
    * Zwraca obiekt do logów keep-alive.
    */
+  stopConversationMessageWatcher() {
+    if (this._msgWatchTimer) {
+      clearInterval(this._msgWatchTimer);
+      this._msgWatchTimer = null;
+    }
+    this._msgWatchSeen = null;
+    this._msgWatchBootstrapped = false;
+  }
+
+  /**
+   * Polling listy wiadomości w widoku czatu — nowe wpisy loguje do konsoli.
+   * Wyłączenie: MESSENGER_WATCH=0 / false.
+   * Interwał: MESSENGER_WATCH_INTERVAL_MS (domyślnie 2500).
+   */
+  startConversationMessageWatcher() {
+    if (this._msgWatchTimer) return;
+
+    const raw = process.env.MESSENGER_WATCH?.trim().toLowerCase();
+    if (raw === "0" || raw === "false" || raw === "no") {
+      console.log("Messenger watch: wyłączony (MESSENGER_WATCH).");
+      return;
+    }
+
+    const intervalMs = Number(process.env.MESSENGER_WATCH_INTERVAL_MS) || 2500;
+    this._msgWatchSeen = new Set();
+    this._msgWatchBootstrapped = false;
+
+    const trimLog = (t, max = 600) =>
+      t.length > max ? `${t.slice(0, max)}…` : t;
+
+    const trimSeen = () => {
+      const seen = this._msgWatchSeen;
+      if (!seen || seen.size <= MESSAGE_WATCH_SEEN_CAP) return;
+      const drop = seen.size - MESSAGE_WATCH_SEEN_CAP + 500;
+      let n = 0;
+      for (const k of seen) {
+        seen.delete(k);
+        if (++n >= drop) break;
+      }
+    };
+
+    const tick = async () => {
+      if (!this.browser?.isConnected?.() || !this.chatFrame || !this.composerSelector) {
+        return;
+      }
+      try {
+        const list = await this.context().evaluate(scrapeVisibleChatState);
+        if (!Array.isArray(list)) return;
+
+        ingestChatSnapshot(list);
+
+        if (!this._msgWatchBootstrapped) {
+          for (const m of list) {
+            this._msgWatchSeen?.add(m.id);
+          }
+          this._msgWatchBootstrapped = true;
+          console.log(
+            `[Messenger watch] baseline: ${list.length} wpisów w widoku (bez logowania historii).`,
+          );
+          return;
+        }
+
+        for (const m of list) {
+          if (!m?.id) continue;
+          if (this._msgWatchSeen?.has(m.id)) continue;
+          this._msgWatchSeen?.add(m.id);
+          const who = m.author || "nieznany";
+          const body = trimLog(String(m.text || "").replace(/\s+/g, " ").trim());
+          console.log(`[Messenger watch] ${who}: ${body}`);
+        }
+        trimSeen();
+      } catch (e) {
+        console.warn("[Messenger watch] tick:", e?.message || e);
+      }
+    };
+
+    console.log(
+      `Messenger watch: start co ${intervalMs} ms (MESSENGER_WATCH=0 aby wyłączyć).`,
+    );
+    void tick();
+    this._msgWatchTimer = setInterval(() => void tick(), intervalMs);
+  }
+
   async keepAliveTick() {
     const s = {
       browserOk: false,
@@ -660,6 +854,7 @@ export class Messenger {
   }
 
   async closeBrowser() {
+    this.stopConversationMessageWatcher();
     try {
       if (this.browser) await this.browser.close();
     } catch (e) {

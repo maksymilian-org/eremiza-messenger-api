@@ -12,15 +12,26 @@ import {
   useApibetaEremiza,
   warmupERemiza,
 } from "./eremiza.js";
+import { ALARM_REACTION_FOLLOWUP_LINES } from "./alarm-followups.js";
 import { Messenger } from "./messenger.js";
 import { getData, getIsChecking, setAlertData, setIsChecking } from "./gist.js";
+import { buildFakeAlert, isFakeAlarmEnabled } from "./fake-alarm.js";
+import {
+  isBoardSnapshotSyncEnabled,
+  mountBoardRoutes,
+  registerAlarmDispatch,
+} from "./board.js";
 import { waitForTimeout } from "./utils.js";
+import { mountAlarmSse } from "./alarm-sse.js";
 
 dotenv.config();
 validate();
 
 const app = express();
+app.use(express.json({ limit: "64kb" }));
 const port = Number(process.env.PORT) || 9998;
+/** `0.0.0.0` — dostęp z tabletu / telefonu w LAN po IP komputera (np. http://192.168.1.10:9988/board). */
+const bindHost = process.env.BIND_HOST?.trim() || "0.0.0.0";
 
 /** Odstęp między pingami Automate — powyżej uznajemy Flow na telefonie za niedziałający (domyślnie 1,5 min). */
 const AUTOMATE_PING_MAX_GAP_MS = (() => {
@@ -118,15 +129,6 @@ async function collectComponentStatus() {
   };
 }
 
-/** Po treści alarmu — prośba o reakcję + legenda (emoji zbliżone do kolorów reakcji w Messengerze). */
-const MESSENGER_REACTION_FOLLOWUPS = [
-  "❌ Nie jadę",
-  "✅ Będę za 1-3 min",
-  "⚠ Będę za 4-6 min",
-  "☑ Mogę być powyżej 7 min",
-  "‼ Dojadę sam, weźcie nomex",
-];
-
 const launch = async () => {
   console.time("Message");
   try {
@@ -188,9 +190,10 @@ const launch = async () => {
       console.log("Sending messages about new alert...");
       await messenger.sendMessages([
         { type: "text", value: message },
-        ...MESSENGER_REACTION_FOLLOWUPS.map((value) => ({ type: "text", value })),
+        ...ALARM_REACTION_FOLLOWUP_LINES.map((value) => ({ type: "text", value })),
         // { type: "map", value: eremizaAlert.coords },
       ]);
+      registerAlarmDispatch(eremizaAlert);
       console.log("Saving new alert...");
       await setAlertData(eremizaAlert);
 
@@ -235,6 +238,73 @@ app.get("/alert", async (req, res) => {
   }
 });
 
+/**
+ * Fałszywy alarm do testów Messengera + tablicy reakcji.
+ * Wymaga ALLOW_FAKE_ALARM=1 w .env. Nie zapisuje Gista.
+ * GET/POST /alert/test — opcjonalnie ?dry=1 tylko tablica HTML (bez wysyłki na Messenger).
+ */
+const handleFakeAlarmTest = async (req, res) => {
+  if (!isFakeAlarmEnabled()) {
+    res.status(404).json({
+      ok: false,
+      error:
+        "Endpoint wyłączony. Ustaw ALLOW_FAKE_ALARM=1 w .env i zrestartuj serwer.",
+    });
+    return;
+  }
+
+  const dry =
+    req.query.dry === "1" ||
+    req.query.dry === "true" ||
+    String(req.query.skip_messenger || "") === "1";
+
+  const eremizaAlert = buildFakeAlert();
+  registerAlarmDispatch(eremizaAlert);
+
+  if (dry) {
+    console.log(
+      "[alert/test] dry-run — tablica reakcji ustawiona, bez wysyłki Messengera.",
+    );
+    res.status(200).json({
+      ok: true,
+      outcome: "dry_board_only",
+      alert: eremizaAlert,
+      hint: "Otwórz /board lub /messenger/board — bez wiadomości w czacie.",
+    });
+    return;
+  }
+
+  try {
+    console.log("[alert/test] wysyłka fałszywego alarmu na Messenger…");
+    await sharedMessenger.launchBrowser();
+    const directionsLink = `https://www.google.com/maps/dir/?api=1&origin=${process.env.FIRE_BRIGADE_COORDINATES}&destination=${eremizaAlert.coords}&travelmode=driving&layer=traffic`;
+    const message = `🚨 ${eremizaAlert.type}, ${eremizaAlert.address}, ${eremizaAlert.description} ${directionsLink} @wszyscy\n\nDodaj reakcję ❤ (podwójny klik):`;
+
+    await sharedMessenger.sendMessages([
+      { type: "text", value: message },
+      ...ALARM_REACTION_FOLLOWUP_LINES.map((value) => ({ type: "text", value })),
+    ]);
+
+    res.status(200).json({
+      ok: true,
+      outcome: "sent_fake",
+      alert: eremizaAlert,
+      hint: "Sprawdź czat i /board — Gist nie został zmieniony.",
+    });
+  } catch (err) {
+    console.error("[alert/test]", err);
+    res.status(500).json({
+      ok: false,
+      error: err?.message ?? String(err),
+      stack: err?.stack,
+      stage: "fake_alarm",
+    });
+  }
+};
+
+app.get("/alert/test", handleFakeAlarmTest);
+app.post("/alert/test", handleFakeAlarmTest);
+
 app.get("/heartbeat", (req, res) => {
   console.log("Heartbeat received");
   res.status(200).send("OK");
@@ -277,11 +347,33 @@ app.get("/__keepalive", (_req, res) => {
   res.status(204).end();
 });
 
-app.listen(port, () => {
-  console.log(
-    `Website-checker is listening on port ${port}. Status: http://127.0.0.1:${port}/status · Automate ping: http://127.0.0.1:${port}/automate/ping`,
-  );
+mountAlarmSse(app);
+mountBoardRoutes(app);
 
+app.listen(port, bindHost, () => {
+  console.log(
+    `Website-checker: port ${port}, interfejs ${bindHost === "0.0.0.0" ? "wszystkie (LAN)" : bindHost} — status: http://127.0.0.1:${port}/status · Automate ping: http://127.0.0.1:${port}/automate/ping`,
+  );
+  console.log(
+    `[board] lokalnie: http://127.0.0.1:${port}/board · w domu (tablet): http://<IP-tego-komputera>:${port}/board`,
+  );
+  if (isBoardSnapshotSyncEnabled()) {
+    const uiPort = Number(process.env.BOARD_UI_PORT) || 9997;
+    console.log(
+      `[board] snapshot włączony — osobny podgląd UI bez restartu Chromium: npm run board:ui → http://127.0.0.1:${uiPort}/board`,
+    );
+  }
+  if (isFakeAlarmEnabled()) {
+    console.log(
+      `[alert/test] włączony: http://127.0.0.1:${port}/alert/test — fałszywy alarm (Gist bez zmian); ?dry=1 = tylko /board bez Messengera`,
+    );
+  }
+  const sseTokenHint = process.env.ALARM_SSE_TOKEN?.trim()
+    ? " (wymagany ?token= lub Authorization: Bearer …)"
+    : "";
+  console.log(
+    `[alarm-sse] strumień: http://127.0.0.1:${port}/alerts/events${sseTokenHint} — zdarzenie "alarm" (JSON: registeredAt, alert)`,
+  );
   const rawKeepalive = process.env.SERVER_KEEPALIVE_INTERVAL_MS?.trim();
   const keepaliveMs =
     rawKeepalive === "" || rawKeepalive === undefined
@@ -312,7 +404,10 @@ app.listen(port, () => {
 
   sharedMessenger
     .warmup()
-    .then(() => console.log("Messenger: rozgrzewka zakończona (sesja gotowa)."))
+    .then(() => {
+      console.log("Messenger: rozgrzewka zakończona (sesja gotowa).");
+      sharedMessenger.startConversationMessageWatcher();
+    })
     .catch((err) =>
       console.error("Messenger: rozgrzewka nie powiodła się:", err?.message || err)
     );
