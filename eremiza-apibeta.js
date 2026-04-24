@@ -1,3 +1,5 @@
+import { normalizeEremizaDateField } from "./eremiza-date.js";
+
 /**
  * e-Remiza beta: POST token (JWT w Cookie) → GET /incident/api/alarm.
  * Jak w przeglądarce: opcjonalnie XSRF-TOKEN w Cookie + nagłówek x-xsrf-token; scalamy Set-Cookie z odpowiedzi.
@@ -175,7 +177,7 @@ function mapApiItemToAlert(item) {
   ].filter(Boolean);
   const address = addressParts.join(", ") || item.locality || "";
   return {
-    date: item.acquired,
+    date: normalizeEremizaDateField(item.acquired),
     incidentId: item.id,
     type,
     address,
@@ -268,7 +270,9 @@ export function isSameEremizaAsGist(alert, gist) {
   if (gId != null && aId != null) {
     return Number(gId) === Number(aId);
   }
-  return gist.date === alert.date;
+  const ndA = normalizeEremizaDateField(alert.date);
+  const ndG = normalizeEremizaDateField(gist.date);
+  return ndA !== "" && ndG !== "" && ndA === ndG;
 }
 
 /** Keep-alive: sesja + jedno zapytanie o alarmy (jak przy normalnym odczycie). */

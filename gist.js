@@ -1,4 +1,5 @@
 import { Octokit } from "octokit";
+import { normalizeEremizaDateField } from "./eremiza-date.js";
 
 const FILE_NAME = "last-alert.json";
 
@@ -65,10 +66,13 @@ export const setIsChecking = async (isChecking) => {
 
 export const setAlertData = async (data) => {
   const currentData = await getData();
+  const merged = { ...(currentData || {}), ...data };
+  if (merged.date != null) {
+    merged.date = normalizeEremizaDateField(merged.date);
+  }
   await setData(
     JSON.stringify({
-      ...(currentData || {}),
-      ...data,
+      ...merged,
       updated: new Date().toISOString(),
     })
   );

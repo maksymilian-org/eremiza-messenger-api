@@ -2,6 +2,8 @@
  * Alarm testowy — tylko gdy ALLOW_FAKE_ALARM=1 (żeby nie odpalać przypadkiem na produkcji).
  */
 
+import { normalizeEremizaDateField } from "./eremiza-date.js";
+
 export function isFakeAlarmEnabled() {
   const v = process.env.ALLOW_FAKE_ALARM?.trim().toLowerCase();
   return v === "1" || v === "true" || v === "yes";
@@ -23,7 +25,7 @@ export function buildFakeAlert() {
     description:
       "To nie jest prawdziwy alarm. Sprawdź reakcje pod opcjami i podgląd /board.",
     coords,
-    date: new Date().toISOString(),
+    date: normalizeEremizaDateField(new Date().toISOString()),
     incidentId: `test-${Date.now()}`,
   };
 }

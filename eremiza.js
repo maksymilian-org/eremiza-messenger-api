@@ -8,6 +8,7 @@ import {
   tryApibetaBeforeChromium,
   useApibetaEremiza,
 } from "./eremiza-apibeta.js";
+import { normalizeEremizaDateField } from "./eremiza-date.js";
 import { convertCoorsFromERemizaToDecimal, waitForTimeout } from "./utils.js";
 
 export {
@@ -131,7 +132,7 @@ async function readLastAlertFromPage() {
   const [date, type, address, description, _, author, coords] = alert;
 
   return {
-    date,
+    date: normalizeEremizaDateField(date),
     type,
     address,
     description,
