@@ -305,6 +305,50 @@ const handleFakeAlarmTest = async (req, res) => {
 app.get("/alert/test", handleFakeAlarmTest);
 app.post("/alert/test", handleFakeAlarmTest);
 
+/**
+ * Cache do zapobiegania powtarzaniu tych samych wiadomości w krótkim czasie (np. 5 min).
+ * Klucz: conversationId:treść
+ */
+const lastSentMessages = new Map();
+const DEDUPLICATION_MS = 5 * 60 * 1000;
+
+/**
+ * Ręczne wysłanie wiadomości na Messenger (np. z innego skryptu).
+ * POST /messenger/send { conversationId, text }
+ * Nie blokuje wykonania (odpowiedź 202), wysyłka w tle przez zablokowaną kolejkę Messengera.
+ */
+app.post("/messenger/send", (req, res) => {
+  const { conversationId, text } = req.body;
+
+  if (!conversationId || !text) {
+    return res.status(400).json({ ok: false, error: "Brak conversationId lub text" });
+  }
+
+  const cacheKey = `${conversationId}:${text}`;
+  const now = Date.now();
+  const lastSent = lastSentMessages.get(cacheKey);
+
+  if (lastSent && now - lastSent < DEDUPLICATION_MS) {
+    return res.json({ ok: true, outcome: "skipped_duplicate" });
+  }
+
+  lastSentMessages.set(cacheKey, now);
+
+  // Czyścimy stare wpisy co jakiś czas
+  if (lastSentMessages.size > 1000) {
+    for (const [k, t] of lastSentMessages) {
+      if (now - t > DEDUPLICATION_MS) lastSentMessages.delete(k);
+    }
+  }
+
+  // Wywołujemy asynchronicznie, nie czekamy na Puppeteera
+  sharedMessenger
+    .sendMessageToConversation(conversationId, text)
+    .catch((err) => console.error("[messenger/send] Błąd:", err?.message));
+
+  res.status(202).json({ ok: true, outcome: "queued" });
+});
+
 app.get("/heartbeat", (req, res) => {
   console.log("Heartbeat received");
   res.status(200).send("OK");

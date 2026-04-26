@@ -242,6 +242,16 @@ export class Messenger {
   _msgWatchSeen = null;
   _msgWatchBootstrapped = false;
 
+  /** Kolejka — jedna operacja na Messengerze naraz (np. wysyłka vs rozgrzewka). */
+  _lock = {
+    _tail: Promise.resolve(),
+    run(fn) {
+      const result = this._tail.then(() => fn());
+      this._tail = result.catch(() => {});
+      return result;
+    },
+  };
+
   constructor() {}
 
   async _debugSnap(step) {
@@ -508,7 +518,7 @@ export class Messenger {
    * Przy starcie serwera — to samo co launchBrowser (logowanie + kompozytor, profil na dysku).
    */
   async warmup() {
-    return this.launchBrowser();
+    return this._lock.run(() => this.launchBrowser());
   }
 
   async launchBrowser() {
@@ -516,6 +526,32 @@ export class Messenger {
       this._launchSingleton = null;
     });
     await this._launchSingleton;
+  }
+
+  /**
+   * Wysyłka wiadomości do konkretnej konwersacji (id lub pełny URL).
+   * Jeśli przeglądarka jest na innej stronie — przechodzi pod wskazany adres.
+   */
+  async sendMessageToConversation(conversationId, text) {
+    return this._lock.run(async () => {
+      await this.launchBrowser();
+      const targetUrl = conversationId.startsWith("http")
+        ? conversationId
+        : `https://www.messenger.com/t/${conversationId}/`;
+
+      if (!conversationPathMatches(this.page.url(), targetUrl)) {
+        console.log(`Messenger: zmiana konwersacji na ${targetUrl}…`);
+        await this.page.goto(targetUrl, {
+          waitUntil: "load",
+          timeout: 90000,
+        });
+        this.chatFrame = null;
+        this.composerSelector = null;
+        this.chatFrame = await this.waitForChatFrame();
+      }
+
+      await this.sendMessages([{ type: "text", value: text }]);
+    });
   }
 
   async _launchBrowserOnce() {
@@ -680,6 +716,10 @@ export class Messenger {
   }
 
   async sendMessages(messages) {
+    return this._lock.run(() => this._sendMessagesBody(messages));
+  }
+
+  async _sendMessagesBody(messages) {
     const ctx = this.context();
     const composerSel = this.composerSelector;
     if (!composerSel) {
