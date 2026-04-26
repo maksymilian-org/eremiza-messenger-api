@@ -537,7 +537,7 @@ export class Messenger {
       await this.launchBrowser();
       const targetUrl = conversationId.startsWith("http")
         ? conversationId
-        : `https://www.messenger.com/t/${conversationId}/`;
+        : `https://www.facebook.com/messages/e2ee/t/${conversationId}`;
 
       if (!conversationPathMatches(this.page.url(), targetUrl)) {
         console.log(`Messenger: zmiana konwersacji na ${targetUrl}…`);
