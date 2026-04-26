@@ -4,3 +4,4 @@ node_modules
 .env
 content.txt
 .DS_Store
+.eremiza-api-cookie
