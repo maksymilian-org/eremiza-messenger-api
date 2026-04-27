@@ -242,7 +242,18 @@ export class Messenger {
   _msgWatchSeen = null;
   _msgWatchBootstrapped = false;
 
-  constructor() {}
+  _lock = {
+    _tail: Promise.resolve(),
+    run(fn) {
+      const result = this._tail.then(() => fn());
+      this._tail = result.catch(() => {});
+      return result;
+    },
+  };
+
+  constructor({ userDataDir } = {}) {
+    this._userDataDir = userDataDir ?? messengerProfileDir();
+  }
 
   async _debugSnap(step) {
     if (!messengerDebugEnabled() || !this.page) return;
@@ -508,7 +519,7 @@ export class Messenger {
    * Przy starcie serwera — to samo co launchBrowser (logowanie + kompozytor, profil na dysku).
    */
   async warmup() {
-    return this.launchBrowser();
+    return this._lock.run(() => this.launchBrowser());
   }
 
   async navigateToConversation(url) {
@@ -521,6 +532,38 @@ export class Messenger {
     this.chatFrame = await this.waitForChatFrame();
   }
 
+  async sendMessageToConversation(conversationId, text) {
+    const targetUrl = conversationId.startsWith("http")
+      ? conversationId
+      : `https://www.facebook.com/messages/t/${conversationId}`;
+
+    return this._lock.run(async () => {
+      await this.launchBrowser();
+
+      const newPage = await this.browser.newPage();
+      await newPage.setViewport({ width: 1600, height: 900 });
+      await newPage.goto(targetUrl, { waitUntil: "load", timeout: 90000 });
+
+      const savedPage = this.page;
+      const savedFrame = this.chatFrame;
+      const savedSelector = this.composerSelector;
+
+      this.page = newPage;
+      this.chatFrame = null;
+      this.composerSelector = null;
+
+      try {
+        this.chatFrame = await this.waitForChatFrame();
+        await this._sendMessagesBody([{ type: "text", value: text }]);
+      } finally {
+        this.page = savedPage;
+        this.chatFrame = savedFrame;
+        this.composerSelector = savedSelector;
+        await newPage.close().catch(() => {});
+      }
+    });
+  }
+
   async launchBrowser() {
     this._launchSingleton ??= this._launchBrowserOnce().finally(() => {
       this._launchSingleton = null;
@@ -531,13 +574,11 @@ export class Messenger {
   async _launchBrowserOnce() {
     const targetUrl = process.env.MESSENGER_CONVERSATION_URL;
 
-    if (
-      this.browser &&
-      this.browser.isConnected() &&
-      this.page &&
-      this.chatFrame &&
-      this.composerSelector
-    ) {
+    const sessionReady = targetUrl
+      ? this.browser?.isConnected() && this.page && this.chatFrame && this.composerSelector
+      : this.browser?.isConnected() && this.page;
+
+    if (sessionReady) {
       try {
         if (
           targetUrl &&
@@ -563,7 +604,7 @@ export class Messenger {
     try {
       console.log(
         "Launch the browser for Messenger (profil:",
-        messengerProfileDir(),
+        this._userDataDir,
         ")..."
       );
 
@@ -576,7 +617,7 @@ export class Messenger {
           "--disable-dev-shm-usage",
           "--disable-gpu",
         ],
-        userDataDir: messengerProfileDir(),
+        userDataDir: this._userDataDir,
       });
 
       this.page = await this.browser.newPage();
@@ -588,7 +629,8 @@ export class Messenger {
         height: 900,
       });
 
-      await this.page.goto(targetUrl, {
+      const startUrl = targetUrl || "https://www.facebook.com/messages/";
+      await this.page.goto(startUrl, {
         waitUntil: "load",
         timeout: 90000,
       });
@@ -679,14 +721,18 @@ export class Messenger {
         await this._debugSnap("03-skip-login-no-email-field");
       }
 
-      this.chatFrame = await this.waitForChatFrame();
-      await this._debugSnap("06-composer-ready");
-      console.log(
-        "Messenger: kompozytor — selektor:",
-        this.composerSelector,
-        "ramka:",
-        this.chatFrame.url() || "(main)"
-      );
+      if (targetUrl) {
+        this.chatFrame = await this.waitForChatFrame();
+        await this._debugSnap("06-composer-ready");
+        console.log(
+          "Messenger: kompozytor — selektor:",
+          this.composerSelector,
+          "ramka:",
+          this.chatFrame.url() || "(main)"
+        );
+      } else {
+        console.log("Messenger: przeglądarka gotowa (tryb send-only, bez stałej konwersacji).");
+      }
     } catch (e) {
       await this._debugSnap("error-catch").catch(() => {});
       console.error(e);
@@ -695,6 +741,10 @@ export class Messenger {
   }
 
   async sendMessages(messages) {
+    return this._lock.run(() => this._sendMessagesBody(messages));
+  }
+
+  async _sendMessagesBody(messages) {
     const ctx = this.context();
     const composerSel = this.composerSelector;
     if (!composerSel) {

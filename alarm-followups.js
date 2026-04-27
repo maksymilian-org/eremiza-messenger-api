@@ -4,7 +4,7 @@
  */
 export const ALARM_REACTION_FOLLOWUP_LINES = [
   "❌ Nie jadę",
-  "✅ Będę za 1-3 min",
+  "✅ Będę za 0-3 min",
   "⚠ Będę za 4-6 min",
   "☑ Mogę być powyżej 7 min",
   "‼ Dojadę sam, weźcie nomex",

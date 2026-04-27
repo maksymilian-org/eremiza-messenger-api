@@ -1,5 +1,6 @@
 import "./logger.js";
 import http from "node:http";
+import path from "node:path";
 import express from "express";
 import dotenv from "dotenv";
 import { validate } from "./validate.js";
@@ -64,6 +65,13 @@ function getAutomateFlowStatus() {
 
 /** Jedna instancja + profil Chromium — logowanie przy starcie, przy alarmie tylko szybkie sprawdzenie. */
 const sharedMessenger = new Messenger();
+
+/** Niezależna instancja wyłącznie dla /messenger/send — osobny profil, osobny proces Chrome. */
+const sharedMessengerSend = new Messenger({
+  userDataDir:
+    process.env.MESSENGER_SEND_USER_DATA_DIR?.trim() ||
+    path.join(process.cwd(), ".data", "puppeteer-messenger-send"),
+});
 
 /** Ping własnego HTTP (jak w interwale keep-alive) — bez logów. */
 function probeInternalKeepalive(targetPort) {
@@ -326,6 +334,17 @@ const handleFakeAlarmTest = async (req, res) => {
 app.get("/alert/test", handleFakeAlarmTest);
 app.post("/alert/test", handleFakeAlarmTest);
 
+app.post("/messenger/send", async (req, res) => {
+  const { conversationId, text } = req.body ?? {};
+  if (!conversationId || !text) {
+    return res.status(400).json({ ok: false, error: "Wymagane pola: conversationId, text" });
+  }
+  sharedMessengerSend
+    .sendMessageToConversation(conversationId, text)
+    .catch((err) => console.error("[messenger/send] błąd:", err?.message));
+  res.status(202).json({ ok: true, outcome: "queued" });
+});
+
 app.get("/heartbeat", (req, res) => {
   console.log("Heartbeat received");
   res.status(200).send("OK");
@@ -431,6 +450,13 @@ app.listen(port, bindHost, () => {
     })
     .catch((err) =>
       console.error("Messenger: rozgrzewka nie powiodła się:", err?.message || err)
+    );
+
+  sharedMessengerSend
+    .warmup()
+    .then(() => console.log("Messenger send: rozgrzewka zakończona."))
+    .catch((err) =>
+      console.error("Messenger send: rozgrzewka nie powiodła się:", err?.message || err)
     );
   warmupERemiza()
     .then(() =>
