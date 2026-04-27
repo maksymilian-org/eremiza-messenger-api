@@ -1,6 +1,21 @@
 export const waitForTimeout = (milliseconds) =>
   new Promise((r) => setTimeout(r, milliseconds));
 
+export async function shortenUrl(url) {
+  try {
+    const res = await fetch(
+      `https://is.gd/create.php?format=simple&url=${encodeURIComponent(url)}`
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const short = (await res.text()).trim();
+    if (!short.startsWith("http")) throw new Error(`nieoczekiwana odpowiedź: ${short}`);
+    return short;
+  } catch (e) {
+    console.warn("[shortenUrl] is.gd error, używam oryginalnego URL:", e.message);
+    return url;
+  }
+}
+
 const convertToDecimal = (degrees, minutes, seconds, direction) => {
   let decimalValue = degrees + minutes / 60 + seconds / 3600;
   if (direction === "S" || direction === "W") {

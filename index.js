@@ -15,13 +15,13 @@ import {
 import { ALARM_REACTION_FOLLOWUP_LINES } from "./alarm-followups.js";
 import { Messenger } from "./messenger.js";
 import { getData, getIsChecking, setAlertData, setIsChecking } from "./gist.js";
-import { buildFakeAlert, isFakeAlarmEnabled } from "./fake-alarm.js";
+import { isFakeAlarmEnabled } from "./fake-alarm.js";
 import {
   isBoardSnapshotSyncEnabled,
   mountBoardRoutes,
   registerAlarmDispatch,
 } from "./board.js";
-import { waitForTimeout } from "./utils.js";
+import { waitForTimeout, shortenUrl } from "./utils.js";
 import { mountAlarmSse } from "./alarm-sse.js";
 
 dotenv.config();
@@ -185,7 +185,8 @@ const launch = async () => {
       }
 
       const directionsLink = `https://www.google.com/maps/dir/?api=1&origin=${process.env.FIRE_BRIGADE_COORDINATES}&destination=${eremizaAlert.coords}&travelmode=driving&layer=traffic`;
-      const message = `🚨 ${eremizaAlert.type}, ${eremizaAlert.address}, ${eremizaAlert.description} ${directionsLink} @wszyscy\n\nDodaj reakcję ❤ (podwójny klik):`;
+      const shortLink = await shortenUrl(directionsLink);
+      const message = `🚨 ${eremizaAlert.type}, ${eremizaAlert.address}\n${eremizaAlert.description} 🧭 ${shortLink}`;
 
       console.log("Sending messages about new alert...");
       await messenger.sendMessages([
@@ -258,13 +259,21 @@ const handleFakeAlarmTest = async (req, res) => {
     req.query.dry === "true" ||
     String(req.query.skip_messenger || "") === "1";
 
-  const eremizaAlert = buildFakeAlert();
+  let eremizaAlert;
+  try {
+    eremizaAlert = await getLastAlert();
+  } catch (err) {
+    console.error("[alert/test] błąd pobierania ostatniego alarmu:", err);
+  }
+  if (!eremizaAlert) {
+    res.status(500).json({ ok: false, error: "Nie udało się pobrać ostatniego alarmu z e-Remiza." });
+    return;
+  }
+
   registerAlarmDispatch(eremizaAlert);
 
   if (dry) {
-    console.log(
-      "[alert/test] dry-run — tablica reakcji ustawiona, bez wysyłki Messengera.",
-    );
+    console.log("[alert/test] dry-run — tablica reakcji ustawiona, bez wysyłki Messengera.");
     res.status(200).json({
       ok: true,
       outcome: "dry_board_only",
@@ -274,11 +283,17 @@ const handleFakeAlarmTest = async (req, res) => {
     return;
   }
 
+  const testConvUrl = process.env.MESSENGER_CONVERSATION_URL_TEST?.trim();
+  const prodConvUrl = process.env.MESSENGER_CONVERSATION_URL?.trim();
+
   try {
-    console.log("[alert/test] wysyłka fałszywego alarmu na Messenger…");
+    console.log("[alert/test] wysyłka alarmu testowego na Messenger…");
     await sharedMessenger.launchBrowser();
+    if (testConvUrl) await sharedMessenger.navigateToConversation(testConvUrl);
+
     const directionsLink = `https://www.google.com/maps/dir/?api=1&origin=${process.env.FIRE_BRIGADE_COORDINATES}&destination=${eremizaAlert.coords}&travelmode=driving&layer=traffic`;
-    const message = `🚨 ${eremizaAlert.type}, ${eremizaAlert.address}, ${eremizaAlert.description} ${directionsLink} @wszyscy\n\nDodaj reakcję ❤ (podwójny klik):`;
+    const shortLink = await shortenUrl(directionsLink);
+    const message = `🚨 ${eremizaAlert.type}, ${eremizaAlert.address}\n${eremizaAlert.description} 🗺 ${shortLink}`;
 
     await sharedMessenger.sendMessages([
       { type: "text", value: message },
@@ -287,9 +302,9 @@ const handleFakeAlarmTest = async (req, res) => {
 
     res.status(200).json({
       ok: true,
-      outcome: "sent_fake",
+      outcome: "sent",
       alert: eremizaAlert,
-      hint: "Sprawdź czat i /board — Gist nie został zmieniony.",
+      hint: "Gist nie został zmieniony.",
     });
   } catch (err) {
     console.error("[alert/test]", err);
@@ -297,57 +312,19 @@ const handleFakeAlarmTest = async (req, res) => {
       ok: false,
       error: err?.message ?? String(err),
       stack: err?.stack,
-      stage: "fake_alarm",
+      stage: "alarm_test",
     });
+  } finally {
+    if (testConvUrl && prodConvUrl) {
+      sharedMessenger.navigateToConversation(prodConvUrl).catch((e) =>
+        console.warn("[alert/test] błąd nawigacji powrotnej do prod:", e.message)
+      );
+    }
   }
 };
 
 app.get("/alert/test", handleFakeAlarmTest);
 app.post("/alert/test", handleFakeAlarmTest);
-
-/**
- * Cache do zapobiegania powtarzaniu tych samych wiadomości w krótkim czasie (np. 5 min).
- * Klucz: conversationId:treść
- */
-const lastSentMessages = new Map();
-const DEDUPLICATION_MS = 5 * 60 * 1000;
-
-/**
- * Ręczne wysłanie wiadomości na Messenger (np. z innego skryptu).
- * POST /messenger/send { conversationId, text }
- * Nie blokuje wykonania (odpowiedź 202), wysyłka w tle przez zablokowaną kolejkę Messengera.
- */
-app.post("/messenger/send", (req, res) => {
-  const { conversationId, text } = req.body;
-
-  if (!conversationId || !text) {
-    return res.status(400).json({ ok: false, error: "Brak conversationId lub text" });
-  }
-
-  const cacheKey = `${conversationId}:${text}`;
-  const now = Date.now();
-  const lastSent = lastSentMessages.get(cacheKey);
-
-  if (lastSent && now - lastSent < DEDUPLICATION_MS) {
-    return res.json({ ok: true, outcome: "skipped_duplicate" });
-  }
-
-  lastSentMessages.set(cacheKey, now);
-
-  // Czyścimy stare wpisy co jakiś czas
-  if (lastSentMessages.size > 1000) {
-    for (const [k, t] of lastSentMessages) {
-      if (now - t > DEDUPLICATION_MS) lastSentMessages.delete(k);
-    }
-  }
-
-  // Wywołujemy asynchronicznie, nie czekamy na Puppeteera
-  sharedMessenger
-    .sendMessageToConversation(conversationId, text)
-    .catch((err) => console.error("[messenger/send] Błąd:", err?.message));
-
-  res.status(202).json({ ok: true, outcome: "queued" });
-});
 
 app.get("/heartbeat", (req, res) => {
   console.log("Heartbeat received");
