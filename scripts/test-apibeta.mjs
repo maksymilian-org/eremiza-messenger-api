@@ -13,7 +13,7 @@ const { clearApibetaSession, fetchLatestAlertApibeta } = await import(
   path.join(root, "eremiza-apibeta.js")
 );
 
-console.log("Test apibeta.e-remiza.pl (logowanie + ostatni alarm)…");
+console.log("Test api.e-remiza.pl (logowanie + ostatni alarm)…");
 clearApibetaSession();
 
 try {

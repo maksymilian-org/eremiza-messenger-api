@@ -1,14 +1,14 @@
 import { normalizeEremizaDateField } from "./eremiza-date.js";
 
 /**
- * e-Remiza beta: POST token (JWT w Cookie) → GET /incident/api/alarm.
+ * e-Remiza: POST token (JWT w Cookie) → GET /incident/api/alarm.
  * Jak w przeglądarce: opcjonalnie XSRF-TOKEN w Cookie + nagłówek x-xsrf-token; scalamy Set-Cookie z odpowiedzi.
- * UI: https://beta.e-remiza.pl/auth-app/auth/login
+ * UI: https://e-remiza.pl/auth-app/auth/login
  */
 
-const DEFAULT_BASE = "https://apibeta.e-remiza.pl";
+const DEFAULT_BASE = "https://api.e-remiza.pl";
 const TOKEN_PATH = "/common/api/authentication/token";
-const DEFAULT_ORIGIN = "https://beta.e-remiza.pl";
+const DEFAULT_ORIGIN = "https://e-remiza.pl";
 
 const SESSION_REFRESH_MS =
   Number(process.env.EREMIZA_SESSION_REFRESH_MS) || 9 * 60 * 1000;
