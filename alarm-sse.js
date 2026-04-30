@@ -31,13 +31,17 @@ function tokenOk(req) {
  */
 export function notifyNewAlarmSse(dispatch) {
   const line = JSON.stringify(dispatch);
+  const total = clients.size;
+  let sent = 0;
   for (const res of clients) {
     try {
       res.write(`event: alarm\ndata: ${line}\n\n`);
+      sent++;
     } catch {
       clients.delete(res);
     }
   }
+  console.log(`[alarm-sse] notifyNewAlarmSse: wysłano do ${sent}/${total} klientów`);
 }
 
 /**
