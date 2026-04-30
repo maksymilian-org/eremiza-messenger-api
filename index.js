@@ -24,6 +24,7 @@ import {
 } from "./board.js";
 import { waitForTimeout, shortenUrl } from "./utils.js";
 import { mountAlarmSse } from "./alarm-sse.js";
+import { sendTelegramAlarm } from "./telegram.js";
 
 dotenv.config();
 validate();
@@ -197,11 +198,20 @@ const launch = async () => {
       const message = `🚨 ${eremizaAlert.type}, ${eremizaAlert.address}\n${eremizaAlert.description} 🧭 ${shortLink}`;
 
       console.log("Sending messages about new alert...");
-      await messenger.sendMessages([
-        { type: "text", value: message },
-        ...ALARM_REACTION_FOLLOWUP_LINES.map((value) => ({ type: "text", value })),
-        // { type: "map", value: eremizaAlert.coords },
+      const [messengerResult] = await Promise.allSettled([
+        messenger.sendMessages([
+          { type: "text", value: message },
+          ...ALARM_REACTION_FOLLOWUP_LINES.map((value) => ({ type: "text", value })),
+          // { type: "map", value: eremizaAlert.coords },
+        ]),
+        sendTelegramAlarm(eremizaAlert, shortLink).then(
+          () => console.log("[telegram] wysłano alarm"),
+          (err) => console.error("[telegram] błąd wysyłki:", err?.message ?? err)
+        ),
       ]);
+      if (messengerResult.status === "rejected") {
+        throw messengerResult.reason;
+      }
       registerAlarmDispatch(eremizaAlert);
       console.log("Saving new alert...");
       await setAlertData(eremizaAlert);
